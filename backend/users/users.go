@@ -7,4 +7,5 @@ type Users struct {
 	Last_name string
 	Description string
 	ImageUrl string
+	Test string
 }
