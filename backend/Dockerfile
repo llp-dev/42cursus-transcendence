@@ -1,4 +1,9 @@
-FROM python:3-slim
+FROM golang:1.23-alpine
+
 WORKDIR /app
-COPY server.py .
-CMD ["python", "server.py"]
+
+copy . .
+
+RUN go build -o main
+
+CMD ["./main"]
