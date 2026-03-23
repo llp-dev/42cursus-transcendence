@@ -1,9 +1,10 @@
 package users
 
 type Users struct {
-	id int
-	pseudo string
-	first_name string
-	last_name string
-	description string
+	ID int
+	Pseudo string
+	First_name string
+	Last_name string
+	Description string
+	ImageUrl string
 }
