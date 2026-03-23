@@ -1,4 +1,4 @@
-package controler
+package controller
 
 import (
 	"github.com/Lord-Lucius/Transcendence/entity"
@@ -8,22 +8,25 @@ import (
 
 type UserController interface {
 	FindAll() []entity.User
-	Save(ctx *gin.Context)
+	Save(ctx *gin.Context) entity.User
 }
 type controller struct {
 	service service.UserService
 }
 
 func New(service service.UserService) UserController {
-	return controller{
+	return &controller{
 		service: service,
 	}
 }
 
 func (c *controller) FindAll() []entity.User {
-	return service.FindAll()
+	return c.service.FindAll()
 }
 
-func (c *controller) Save(ctx *gin.Context) {
-
+func (c *controller) Save(ctx *gin.Context) entity.User {
+	var user entity.User
+	ctx.BindJSON(&user)
+	c.service.Save(user)
+	return user
 }
