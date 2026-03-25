@@ -1297,3 +1297,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+//others
+.air.toml
+.env
