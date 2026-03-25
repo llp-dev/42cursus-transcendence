@@ -1301,3 +1301,4 @@ FodyWeavers.xsd
 //others
 .air.toml
 .env
+tmp
