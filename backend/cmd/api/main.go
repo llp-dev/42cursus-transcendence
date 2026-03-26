@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/Lord-Lucius/Transcendence/internal/handlers"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -15,7 +16,7 @@ func main() {
 		log.Println("[WARNING] .env file not found")
 	}
 
-	var router *gin.Engine= gin.Default()
+	var router *gin.Engine = gin.Default()
 	router.SetTrustedProxies(nil)
 
 	router.GET("/", func(ctx *gin.Context) {
@@ -25,6 +26,14 @@ func main() {
 			"status": "success",
 		})
 	})
+
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "OK",
+		})
+	})
+
+	handlers.SetupRoutes(router)
 
 	port := os.Getenv("API_PORT")
 	if (port == "") {
