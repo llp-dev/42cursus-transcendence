@@ -13,7 +13,6 @@ func main() {
 
 	router.GET("/", func(ctx *gin.Context) {
 		ctx.JSON(200, gin.H{
-			// gin.H = map[string]any{}
 			"message": "Backend API is running",
 			"status": "success",
 		})
@@ -29,7 +28,7 @@ func main() {
 
 	port := os.Getenv("API_PORT")
 	if (port == "") {
-		port = "9000"
+		port = "8000"
 	}
 
 	router.Run(":" + port)
