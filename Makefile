@@ -23,9 +23,8 @@ build:
 up:
 	docker compose up -d
 	@echo "✅ Services started!"
-	@echo "Django: http://localhost:8000"
-	@echo "React: http://localhost:3000"
-	@echo "Django Admin: http://localhost:8000/admin"
+	@echo ✅ backend started!
+	@echo ✅ frontend started!
 
 down:
 	docker compose down -v
