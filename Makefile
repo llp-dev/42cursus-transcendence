@@ -15,11 +15,6 @@ help:
 	@echo "  make stop               - Stop containers"
 	@echo "  make restart            - Restart containers"
 	@echo "  make clean              - Remove containers and volumes"
-	@echo "  make migrate            - Run Django migrations"
-	@echo "  make makemigrations     - Create migration files"
-	@echo "  make create-superuser   - Create a superuser (admin)"
-	@echo "  make shell-backend      - Access Django shell"
-	@echo "  make shell-db           - Access PostgreSQL shell"
 	@echo ""
 
 build:
