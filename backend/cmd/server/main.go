@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/Lord-Lucius/Transcendence/internal/handlers"
+	"github.com/Lord-Lucius/Transcendence/internal/router"
 	"github.com/gin-gonic/gin"
 )
 
