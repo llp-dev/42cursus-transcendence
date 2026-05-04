@@ -132,6 +132,8 @@ func (s *PostService) CreateComment(content, authorID, postID string) (*models.R
 	}
 
 
+	
+	// Reload with Author preloaded
 	return s.repo.GetCommentByID(comment.ID)
 }
 
