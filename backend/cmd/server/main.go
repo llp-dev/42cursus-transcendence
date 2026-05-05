@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/Transcendence/config"
 	"github.com/Transcendence/redis"
 	"github.com/Transcendence/routes"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,11 +24,23 @@ func main() {
 	var router *gin.Engine = gin.Default()
 	router.SetTrustedProxies(nil)
 
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: false,
+	}))
+
+	router.OPTIONS("/*path", func(c *gin.Context) {
+		c.Status(204)
+	})
+
 	rdb, err := redis.InitRedis()
 	if err != nil {
 		log.Fatal(err)
 	}
-	redis.Subscribe(rdb, "test-channel", func(message string) {
+	redis.Subscribe(context.Background(), rdb, "test-channel", func(message string) {
 		log.Printf("Handler received: %s", message)
 	})
 
