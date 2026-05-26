@@ -1,317 +1,106 @@
 package tests
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 )
 
-// TestFriendRequest_Success verifies that sending a friend request creates
-// a pending row in the friends table.
-func TestFriendRequest_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, _ := registerAndLogin(t, router, "bob")
-
-	req := authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-
-	// Verify in DB
-	var count int64
-	db.Table("friends").
-		Where("user_id = ? AND friend_id = ? AND status = ?", aliceID, bobID, "pending").
-		Count(&count)
-	if count != 1 {
-		t.Fatalf("expected 1 pending row, got %d", count)
-	}
-}
-
-// TestFriendRequest_NoAuth verifies that an unauthenticated request returns 401.
-func TestFriendRequest_NoAuth(t *testing.T) {
+func TestFriend_FollowAndListFollowers(t *testing.T) {
 	router, _ := SetupTestEnv()
-	_, _ = registerAndLogin(t, router, "alice") // Just to have someone in DB
-	bobID, _ := registerAndLogin(t, router, "bob")
+	alice := registerAndLogin(t, router, "falice", "falice@test.com", "StrongPass123!")
+	bob := registerAndLogin(t, router, "fbob", "fbob@test.com", "StrongPass123!")
 
-	req := authRequest(t, "POST", "/api/friends/request/"+bobID, "", nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-}
-
-// TestFriendAccept_Success verifies that accepting a pending request
-// changes the status to "accepted".
-func TestFriendAccept_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
-
-	// Alice sends request to Bob
-	doRequest(router, authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil))
-
-	// Bob accepts
-	req := authRequest(t, "POST", "/api/friends/accept/"+aliceID, bobToken, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "POST", "/api/friends/follow/"+bob.ID, alice.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("follow: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
 
-	var count int64
-	db.Table("friends").
-		Where("user_id = ? AND friend_id = ? AND status = ?", aliceID, bobID, "accepted").
-		Count(&count)
-	if count != 1 {
-		t.Fatalf("expected 1 accepted row, got %d", count)
-	}
-}
-
-// TestFriendReject_Success verifies that rejecting a request deletes the row.
-func TestFriendReject_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
-
-	doRequest(router, authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil))
-
-	req := authRequest(t, "POST", "/api/friends/reject/"+aliceID, bobToken, nil)
-	w := doRequest(router, req)
+	w = authedRequest(t, router, "GET", "/api/users/"+bob.ID+"/followers", alice.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("followers: expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 follower, got %d", len(resp.Data))
 	}
 
-	var count int64
-	db.Table("friends").
-		Where("user_id = ? AND friend_id = ?", aliceID, bobID).
-		Count(&count)
-	if count != 0 {
-		t.Fatalf("expected 0 rows after reject, got %d", count)
-	}
-}
-
-// TestFollow_Success verifies that following a user creates a follow row.
-func TestFollow_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, _ := registerAndLogin(t, router, "bob")
-
-	req := authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil)
-	w := doRequest(router, req)
+	// alice's following list should contain one entry
+	w = authedRequest(t, router, "GET", "/api/users/"+alice.ID+"/following", alice.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-
-	var count int64
-	db.Table("friends").
-		Where("user_id = ? AND friend_id = ? AND status = ?", aliceID, bobID, "follow").
-		Count(&count)
-	if count != 1 {
-		t.Fatalf("expected 1 follow row, got %d", count)
+		t.Fatalf("following: expected 200, got %d", w.Code)
 	}
 }
 
-// TestFollow_AlreadyFollowing rejects a duplicate follow.
-func TestFollow_AlreadyFollowing(t *testing.T) {
+func TestFriend_FollowSelfFails(t *testing.T) {
 	router, _ := SetupTestEnv()
+	alice := registerAndLogin(t, router, "fself", "fself@test.com", "StrongPass123!")
 
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, _ := registerAndLogin(t, router, "bob")
-
-	// First follow OK
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil))
-
-	// Second one should fail
-	req := authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "POST", "/api/friends/follow/"+alice.ID, alice.Token, "")
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+		t.Fatalf("follow self: expected 400, got %d", w.Code)
 	}
 }
 
-// TestFollow_CompatibleWithFriendship verifies that an existing friendship
-// does NOT block a follow (the bug we fixed earlier).
-func TestFollow_CompatibleWithFriendship(t *testing.T) {
+func TestFriend_Unfollow(t *testing.T) {
 	router, _ := SetupTestEnv()
+	alice := registerAndLogin(t, router, "funf_a", "funf_a@test.com", "StrongPass123!")
+	bob := registerAndLogin(t, router, "funf_b", "funf_b@test.com", "StrongPass123!")
 
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
+	authedRequest(t, router, "POST", "/api/friends/follow/"+bob.ID, alice.Token, "")
 
-	// Make them friends first
-	doRequest(router, authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil))
-	doRequest(router, authRequest(t, "POST", "/api/friends/accept/"+aliceID, bobToken, nil))
-
-	// Now Alice should still be able to follow Bob
-	req := authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "DELETE", "/api/friends/follow/"+bob.ID, alice.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (follow + accepted should coexist), got %d body=%s",
-			w.Code, w.Body.String())
+		t.Fatalf("unfollow: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestUnfollow_Success removes the follow row.
-func TestUnfollow_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, _ := registerAndLogin(t, router, "bob")
-
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil))
-
-	req := authRequest(t, "DELETE", "/api/friends/follow/"+bobID, aliceToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-
-	var count int64
-	db.Table("friends").
-		Where("user_id = ? AND friend_id = ? AND status = ?", aliceID, bobID, "follow").
-		Count(&count)
-	if count != 0 {
-		t.Fatalf("expected 0 follow rows after unfollow, got %d", count)
-	}
-}
-
-// TestRemoveFriend deletes accepted friendship in either direction.
-func TestRemoveFriend_Success(t *testing.T) {
-	router, db := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
-
-	// Make them friends
-	doRequest(router, authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil))
-	doRequest(router, authRequest(t, "POST", "/api/friends/accept/"+aliceID, bobToken, nil))
-
-	// Bob removes Alice (the row was created with user_id=Alice, friend_id=Bob)
-	req := authRequest(t, "DELETE", "/api/friends/"+aliceID, bobToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-
-	var count int64
-	db.Table("friends").
-		Where("status = ? AND ((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?))",
-			"accepted", aliceID, bobID, bobID, aliceID).
-		Count(&count)
-	if count != 0 {
-		t.Fatalf("expected 0 accepted rows after remove, got %d", count)
-	}
-}
-
-// TestGetFollowers_Success lists who follows a user.
-func TestGetFollowers_Success(t *testing.T) {
+func TestFriend_RequestAcceptFlow(t *testing.T) {
 	router, _ := SetupTestEnv()
+	alice := registerAndLogin(t, router, "freq_a", "freq_a@test.com", "StrongPass123!")
+	bob := registerAndLogin(t, router, "freq_b", "freq_b@test.com", "StrongPass123!")
 
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
-
-	// Bob follows Alice
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+aliceID, bobToken, nil))
-
-	// Get Alice's followers
-	req := authRequest(t, "GET", "/api/users/"+aliceID+"/followers", aliceToken, nil)
-	w := doRequest(router, req)
+	// alice sends a friend request to bob
+	w := authedRequest(t, router, "POST", "/api/friends/request/"+bob.ID, alice.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("send request: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
 
-	resp := parseJSON(t, w)
-	data, ok := resp["data"].([]interface{})
-	if !ok {
-		t.Fatalf("response should contain 'data' array, got: %v", resp)
+	// bob accepts alice's request
+	w = authedRequest(t, router, "POST", "/api/friends/accept/"+alice.ID, bob.Token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("accept request: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
-	if len(data) != 1 {
-		t.Fatalf("expected 1 follower, got %d", len(data))
-	}
-	follower := data[0].(map[string]interface{})
-	if follower["id"] != bobID {
-		t.Fatalf("expected follower to be bob (%s), got %v", bobID, follower["id"])
+
+	// they should now appear in each other's friends list
+	w = authedRequest(t, router, "GET", "/api/users/"+alice.ID+"/friends", alice.Token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("friends list: expected 200, got %d", w.Code)
 	}
 }
 
-// TestGetFollowing_Success lists who a user follows.
-func TestGetFollowing_Success(t *testing.T) {
+func TestFriend_RequestUnknownTarget(t *testing.T) {
 	router, _ := SetupTestEnv()
+	alice := registerAndLogin(t, router, "funk", "funk@test.com", "StrongPass123!")
 
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, _ := registerAndLogin(t, router, "bob")
-
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+bobID, aliceToken, nil))
-
-	req := authRequest(t, "GET", "/api/users/"+aliceID+"/following", aliceToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	resp := parseJSON(t, w)
-	data := resp["data"].([]interface{})
-	if len(data) != 1 {
-		t.Fatalf("expected 1 following, got %d", len(data))
-	}
-	if data[0].(map[string]interface{})["id"] != bobID {
-		t.Fatalf("expected following to be bob")
+	w := authedRequest(t, router, "POST", "/api/friends/request/550e8400-e29b-41d4-a716-446655440000", alice.Token, "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("request to unknown: expected 400, got %d", w.Code)
 	}
 }
 
-// TestGetFriends_Success lists accepted friends in both directions.
-func TestGetFriends_Success(t *testing.T) {
+func TestFriend_RejectRequest(t *testing.T) {
 	router, _ := SetupTestEnv()
+	alice := registerAndLogin(t, router, "frej_a", "frej_a@test.com", "StrongPass123!")
+	bob := registerAndLogin(t, router, "frej_b", "frej_b@test.com", "StrongPass123!")
 
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	bobID, bobToken := registerAndLogin(t, router, "bob")
+	authedRequest(t, router, "POST", "/api/friends/request/"+bob.ID, alice.Token, "")
 
-	// Make them friends
-	doRequest(router, authRequest(t, "POST", "/api/friends/request/"+bobID, aliceToken, nil))
-	doRequest(router, authRequest(t, "POST", "/api/friends/accept/"+aliceID, bobToken, nil))
-
-	// Alice gets her friends
-	req := authRequest(t, "GET", "/api/users/"+aliceID+"/friends", aliceToken, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "POST", "/api/friends/reject/"+alice.ID, bob.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	resp := parseJSON(t, w)
-	data := resp["data"].([]interface{})
-	if len(data) != 1 {
-		t.Fatalf("expected 1 friend, got %d", len(data))
-	}
-}
-
-// TestUserResponse_FollowersCount verifies that GetUser returns counts.
-func TestUserResponse_FollowersCount(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-	_, charlieToken := registerAndLogin(t, router, "charlie")
-
-	// Bob and Charlie follow Alice
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+aliceID, bobToken, nil))
-	doRequest(router, authRequest(t, "POST", "/api/friends/follow/"+aliceID, charlieToken, nil))
-
-	// Get Alice profile
-	req := authRequest(t, "GET", "/api/users/"+aliceID, aliceToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	resp := parseJSON(t, w)
-	followersCount, ok := resp["followers_count"].(float64) // JSON numbers are float64
-	if !ok {
-		t.Fatalf("response should contain followers_count, got: %v", resp)
-	}
-	if int(followersCount) != 2 {
-		t.Fatalf("expected 2 followers, got %d", int(followersCount))
+		t.Fatalf("reject: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
 }

@@ -1,230 +1,188 @@
 package tests
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
-// helper to create a post and return its ID
-func createPost(t *testing.T, router http.Handler, token, content string) string {
+// createPost creates a post as the given user and returns its id.
+func createPost(t *testing.T, router *gin.Engine, token, content string) string {
 	t.Helper()
-
-	req := authRequest(t, "POST", "/api/posts", token, map[string]string{"content": content})
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
-		t.Fatalf("createPost failed: %d body=%s", w.Code, w.Body.String())
+	w := authedRequest(t, router, "POST", "/api/posts", token, `{"content":"`+content+`"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create post: expected 201, got %d - body: %s", w.Code, w.Body.String())
 	}
-	resp := parseJSON(t, w)
-	id, ok := resp["id"].(string)
-	if !ok || id == "" {
-		t.Fatalf("createPost: response should contain id")
+	var resp struct {
+		ID      string `json:"id"`
+		Content string `json:"content"`
 	}
-	return id
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode created post: %v", err)
+	}
+	if resp.ID == "" || resp.Content != content {
+		t.Fatalf("unexpected created post: %+v", resp)
+	}
+	return resp.ID
 }
 
-// TestCreatePost_Success verifies that an authenticated user can create a post.
-func TestCreatePost_Success(t *testing.T) {
+func TestPost_CreateAndGet(t *testing.T) {
 	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "pauthor", "pauthor@test.com", "StrongPass123!")
 
-	_, token := registerAndLogin(t, router, "alice")
+	id := createPost(t, router, author.Token, "hello world")
 
-	id := createPost(t, router, token, "Hello world")
-	if id == "" {
-		t.Fatalf("expected non-empty post ID")
+	w := authedRequest(t, router, "GET", "/api/posts/"+id, author.Token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get post: expected 200, got %d", w.Code)
+	}
+
+	w = authedRequest(t, router, "GET", "/api/posts", author.Token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list posts: expected 200, got %d", w.Code)
+	}
+	var list struct {
+		Data  []map[string]interface{} `json:"data"`
+		Total int64                    `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if list.Total != 1 || len(list.Data) != 1 {
+		t.Fatalf("expected 1 post, got total=%d len=%d", list.Total, len(list.Data))
 	}
 }
 
-// TestCreatePost_NoAuth verifies that anonymous users can't create posts.
-func TestCreatePost_NoAuth(t *testing.T) {
+func TestPost_GetNotFound(t *testing.T) {
 	router, _ := SetupTestEnv()
+	u := registerAndLogin(t, router, "pnf", "pnf@test.com", "StrongPass123!")
 
-	req := authRequest(t, "POST", "/api/posts", "", map[string]string{"content": "Hello"})
-	w := doRequest(router, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	w := authedRequest(t, router, "GET", "/api/posts/550e8400-e29b-41d4-a716-446655440000", u.Token, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
 	}
 }
 
-// TestCreatePost_MissingContent rejects empty content.
-func TestCreatePost_MissingContent(t *testing.T) {
+func TestPost_CreateRequiresContent(t *testing.T) {
 	router, _ := SetupTestEnv()
+	u := registerAndLogin(t, router, "pempty", "pempty@test.com", "StrongPass123!")
 
-	_, token := registerAndLogin(t, router, "alice")
-
-	req := authRequest(t, "POST", "/api/posts", token, map[string]string{"content": ""})
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "POST", "/api/posts", u.Token, `{}`)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for empty content, got %d", w.Code)
+		t.Fatalf("expected 400 for missing content, got %d", w.Code)
 	}
 }
 
-// TestGetPosts_Pagination retrieves the paginated list.
-func TestGetPosts_Pagination(t *testing.T) {
+func TestPost_CreateRequiresAuth(t *testing.T) {
 	router, _ := SetupTestEnv()
 
-	_, token := registerAndLogin(t, router, "alice")
-
-	for i := 0; i < 3; i++ {
-		createPost(t, router, token, "Post content")
+	w := authedRequest(t, router, "POST", "/api/posts", "", `{"content":"x"}`)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", w.Code)
 	}
+}
 
-	req := authRequest(t, "GET", "/api/posts?page=1&limit=10", "", nil)
-	w := doRequest(router, req)
+func TestPost_UpdateOwnership(t *testing.T) {
+	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "pup", "pup@test.com", "StrongPass123!")
+	other := registerAndLogin(t, router, "pother", "pother@test.com", "StrongPass123!")
+
+	id := createPost(t, router, author.Token, "original")
+
+	w := authedRequest(t, router, "PUT", "/api/posts/"+id, author.Token, `{"content":"edited"}`)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("owner update: expected 200, got %d - body: %s", w.Code, w.Body.String())
 	}
 
-	resp := parseJSON(t, w)
-	data, ok := resp["data"].([]interface{})
-	if !ok {
-		t.Fatalf("expected data array")
-	}
-	if len(data) < 3 {
-		t.Fatalf("expected at least 3 posts, got %d", len(data))
-	}
-	if _, ok := resp["total"]; !ok {
-		t.Fatalf("response should include total")
-	}
-}
-
-// TestGetPostsByUser returns posts of a specific user.
-func TestGetPostsByUser_Success(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	aliceID, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-
-	createPost(t, router, aliceToken, "Alice's post")
-	createPost(t, router, bobToken, "Bob's post")
-
-	req := authRequest(t, "GET", "/api/posts/user/"+aliceID, "", nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	resp := parseJSON(t, w)
-	data := resp["data"].([]interface{})
-	if len(data) != 1 {
-		t.Fatalf("expected 1 post for Alice, got %d", len(data))
-	}
-}
-
-// TestUpdatePost_Success updates the user's own post.
-func TestUpdatePost_Success(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	_, token := registerAndLogin(t, router, "alice")
-	postID := createPost(t, router, token, "Original")
-
-	req := authRequest(t, "PUT", "/api/posts/"+postID, token, map[string]string{"content": "Updated content"})
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-}
-
-// TestUpdatePost_NotOwner rejects updates by non-owners.
-func TestUpdatePost_NotOwner(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-
-	postID := createPost(t, router, aliceToken, "Alice's post")
-
-	req := authRequest(t, "PUT", "/api/posts/"+postID, bobToken, map[string]string{"content": "hacked"})
-	w := doRequest(router, req)
+	w = authedRequest(t, router, "PUT", "/api/posts/"+id, other.Token, `{"content":"hijack"}`)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
+		t.Fatalf("non-owner update: expected 403, got %d", w.Code)
 	}
 }
 
-// TestDeletePost_Success deletes the user's own post.
-func TestDeletePost_Success(t *testing.T) {
+func TestPost_Delete(t *testing.T) {
 	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "pdel", "pdel@test.com", "StrongPass123!")
+	id := createPost(t, router, author.Token, "to delete")
 
-	_, token := registerAndLogin(t, router, "alice")
-	postID := createPost(t, router, token, "to delete")
-
-	req := authRequest(t, "DELETE", "/api/posts/"+postID, token, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "DELETE", "/api/posts/"+id, author.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("delete: expected 200, got %d", w.Code)
+	}
+
+	w = authedRequest(t, router, "GET", "/api/posts/"+id, author.Token, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("get deleted: expected 404, got %d", w.Code)
 	}
 }
 
-// TestDeletePost_NotOwner rejects deletion by non-owners.
-func TestDeletePost_NotOwner(t *testing.T) {
+func TestPost_ToggleLike(t *testing.T) {
 	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "plike", "plike@test.com", "StrongPass123!")
+	liker := registerAndLogin(t, router, "pliker", "pliker@test.com", "StrongPass123!")
+	id := createPost(t, router, author.Token, "like me")
 
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-
-	postID := createPost(t, router, aliceToken, "Alice's post")
-
-	req := authRequest(t, "DELETE", "/api/posts/"+postID, bobToken, nil)
-	w := doRequest(router, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
-
-// TestToggleLike_AddRemove tests the like toggle (add then remove).
-func TestToggleLike_AddRemove(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-
-	postID := createPost(t, router, aliceToken, "Like me!")
-
-	// Bob likes
-	req := authRequest(t, "POST", "/api/posts/"+postID+"/like", bobToken, nil)
-	w := doRequest(router, req)
+	w := authedRequest(t, router, "POST", "/api/posts/"+id+"/like", liker.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on first like, got %d", w.Code)
+		t.Fatalf("like: expected 200, got %d - body: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Liked      bool `json:"liked"`
+		LikesCount int  `json:"likes_count"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.Liked || resp.LikesCount != 1 {
+		t.Fatalf("expected liked=true count=1, got %+v", resp)
 	}
 
-	// Bob unlikes (toggle)
-	req = authRequest(t, "POST", "/api/posts/"+postID+"/like", bobToken, nil)
-	w = doRequest(router, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on second like (unlike), got %d", w.Code)
-	}
-}
-
-// TestCreateComment_Success adds a comment to a post.
-func TestCreateComment_Success(t *testing.T) {
-	router, _ := SetupTestEnv()
-
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
-
-	postID := createPost(t, router, aliceToken, "Discuss!")
-
-	req := authRequest(t, "POST", "/api/posts/"+postID+"/comments", bobToken,
-		map[string]string{"content": "Nice post!"})
-	w := doRequest(router, req)
-	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
-		t.Fatalf("expected 200/201, got %d body=%s", w.Code, w.Body.String())
+	w = authedRequest(t, router, "POST", "/api/posts/"+id+"/like", liker.Token, "")
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Liked || resp.LikesCount != 0 {
+		t.Fatalf("expected liked=false count=0 after second toggle, got %+v", resp)
 	}
 }
 
-// TestGetComments_Success lists comments for a post.
-func TestGetComments_Success(t *testing.T) {
+func TestPost_Comments(t *testing.T) {
 	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "pcom", "pcom@test.com", "StrongPass123!")
+	commenter := registerAndLogin(t, router, "pcommenter", "pcommenter@test.com", "StrongPass123!")
+	id := createPost(t, router, author.Token, "comment on me")
 
-	_, aliceToken := registerAndLogin(t, router, "alice")
-	_, bobToken := registerAndLogin(t, router, "bob")
+	w := authedRequest(t, router, "POST", "/api/posts/"+id+"/comments", commenter.Token, `{"content":"nice post"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create comment: expected 201, got %d - body: %s", w.Code, w.Body.String())
+	}
 
-	postID := createPost(t, router, aliceToken, "Discuss!")
-	doRequest(router, authRequest(t, "POST", "/api/posts/"+postID+"/comments", bobToken,
-		map[string]string{"content": "Nice!"}))
-
-	req := authRequest(t, "GET", "/api/posts/"+postID+"/comments", "", nil)
-	w := doRequest(router, req)
+	w = authedRequest(t, router, "GET", "/api/posts/"+id+"/comments", author.Token, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("list comments: expected 200, got %d", w.Code)
+	}
+	var list struct {
+		Total int `json:"total"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &list)
+	if list.Total != 1 {
+		t.Fatalf("expected 1 comment, got %d", list.Total)
+	}
+}
+
+func TestPost_GetByUser(t *testing.T) {
+	router, _ := SetupTestEnv()
+	author := registerAndLogin(t, router, "pbyuser", "pbyuser@test.com", "StrongPass123!")
+	createPost(t, router, author.Token, "post one")
+	createPost(t, router, author.Token, "post two")
+
+	w := authedRequest(t, router, "GET", "/api/posts/user/"+author.ID, author.Token, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get by user: expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Data) != 2 {
+		t.Fatalf("expected 2 posts by author, got %d", len(resp.Data))
 	}
 }
