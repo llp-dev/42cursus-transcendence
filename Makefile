@@ -16,7 +16,7 @@ COMPOSE    ?= $(ENGINE) compose -f infra/docker-compose.yml
 
 .PHONY: help build up down stop restart re clean ps \
         logs logs-backend logs-frontend logs-nginx logs-db \
-        test test-frontend seed \
+        test test-frontend seed seed-full \
         shell-backend shell-frontend shell-nginx shell-postgres shell-redis \
         fmt lint swagger prune version
 
@@ -49,6 +49,11 @@ help:
 	@echo "  make seed          Seed via the REST API with Python (50 users,"
 	@echo "                     500 unique posts, comments, likes, follows;"
 	@echo "                     real photos). Override: make seed USERS=200 POSTS_TARGET=800"
+	@echo "  make seed-full     Seed directly in the DB with Go (50 users + full"
+	@echo "                     demo dataset: posts/tags, like+dislike reactions on"
+	@echo "                     posts & comments, private chat (DM), notifications,"
+	@echo "                     a 2FA account and a fixed demo login). Covers what"
+	@echo "                     the REST seeder can't (chat is WebSocket-only)."
 	@echo ""
 	@echo "Shells:"
 	@echo "  make shell-backend   Open a shell in the backend (Go API) container"
@@ -147,6 +152,23 @@ seed:
 	@USERS="$(USERS)" POSTS_TARGET="$(POSTS_TARGET)" PAR="$(PAR)" \
 		RATE_LIMIT_MAX="$(RATE_LIMIT_MAX)" \
 		python3 scripts/seed.py
+
+# Seed directly in the database with Go (cmd/seedfull), reusing the app's GORM
+# models. Unlike `make seed` (REST API), this writes every table the app uses —
+# including private chat messages, which the API can't create because chat is
+# WebSocket-only — plus like/dislike reactions on posts and comments, hashtags,
+# notifications, a 2FA account and a fixed demo login (demo@demo.trans).
+#
+# It runs as the `seedfull` compose service (image $(GO_IMAGE)) so it sits on the
+# compose network and can reach the `db` host. The service uses the `seedfull`
+# profile, so it never starts with `make up` — only when invoked here.
+#
+# Idempotent: it exits without touching anything if the demo account already
+# exists. To re-seed from scratch: `make clean up seed-full`.
+seed-full:
+	@echo "Seeding the database directly with Go ($(GO_IMAGE))..."
+	@$(COMPOSE) --profile seedfull run --rm seedfull
+	@echo "Done. Demo login: demo@demo.trans / Demo1234! — open https://localhost:3000"
 
 # ==================== Shells & tools ====================
 

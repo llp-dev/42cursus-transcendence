@@ -84,6 +84,24 @@ services:
       timeout: 5s
       retries: 5
 
+  seedfull:
+    image: golang:1.25-alpine
+    container_name: seedfull
+    working_dir: /app
+    volumes:
+      - ../backend:/app
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - seedfull
+    command: ["go", "run", "./cmd/seedfull"]
+
 volumes:
   db_data:
   redis_data:
