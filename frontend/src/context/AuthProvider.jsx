@@ -60,6 +60,10 @@ export function AuthProvider({ children }) {
         }
 
         let cancelled = false
+        if (!storedToken) {
+            setLoading(false)
+            return () => { cancelled = true }
+        }
         api.get('/api/auth/me')
             .then((res) => {
                 if (cancelled) return
